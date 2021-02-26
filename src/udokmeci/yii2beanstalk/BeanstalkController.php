@@ -53,7 +53,23 @@ class BeanstalkController extends Controller
 
     /**
      * Controller specific tubes to listen if they do not exists.
+     *
+     * It accepts the following syntax:
+     *
+     * ```php
+     * return [
+     *  'tube-one',
+     *  'function-name' => 'tube-two'
+     * ]
+     * ```
+     *
+     * For the first entry, a class method named actionTubeOne, if defined, will be bound to a beanstalkd tube named 'tube-one'.
+     * For the second entry, a class method named actionFunctionName, if defined, will be bound to a beanstalkd tube named 'tube-two'.
+     *
+     * If you need to stablish a more complex procedure consider overriding the [[setTubeActions]] method.
+     *
      * @return array Collection of tube names to listen.
+     * @see setTubeActions()
      */
     public function listenTubes()
     {
@@ -89,6 +105,30 @@ class BeanstalkController extends Controller
     }
 
     /**
+     * Registers the relation between tubes and actions in this controller in the controller [[tubeActions]] variable
+     */
+    public function setTubeActions()
+    {
+        foreach ($this->getTubes() as $key => $tube) {
+            if (is_string($key) && !is_numeric($key)) {
+                $methodName = 'action' . $key;
+            } else {
+                $methodName = 'action' . str_replace(' ', '', ucwords(implode(' ', explode('-', $tube))));
+            }
+
+            if ($this->hasMethod($methodName)) {
+                $this->tubeActions[$tube] = $methodName;
+                $this->stdout(Yii::t('udokmeci.beanstalkd', "Listening {tube} tube.",
+                        ["tube" => $tube]) . "\n", Console::FG_GREEN);
+            } else {
+                $this->stdout(Yii::t('udokmeci.beanstalkd',
+                        "Not Listening {tube} tube since there is no action defined. {methodName}",
+                        ["tube" => $tube, "methodName" => $methodName]) . "\n", Console::FG_YELLOW);
+            }
+        }
+    }
+
+    /**
      * Returns the matching action method for the job.
      *
      * @param object $statsJob stats-job response from deamon.
@@ -96,7 +136,6 @@ class BeanstalkController extends Controller
      */
     public function getTubeAction($statsJob)
     {
-
         return isset($this->tubeActions[$statsJob->tube]) ? $this->tubeActions[$statsJob->tube] : false;
     }
 
@@ -276,20 +315,13 @@ class BeanstalkController extends Controller
         if ($action->id == "index") {
             try {
                 $this->registerSignalHandler();
-                foreach ($this->getTubes() as $key => $tube) {
-                    $methodName = 'action' . str_replace(' ', '', ucwords(implode(' ', explode('-', $tube))));
-                    if ($this->hasMethod($methodName)) {
-                        $this->tubeActions[$tube] = $methodName;
-                        $this->stdout(Yii::t('udokmeci.beanstalkd', "Listening {tube} tube.",
-                                ["tube" => $tube]) . "\n", Console::FG_GREEN);
-                        $bean = $this->beanstalk->watch($tube);
-                        if (!$bean) {
-                            $this->stderr("Check beanstalkd!" . "\n", Console::FG_RED);
-                        }
-                    } else {
-                        $this->stdout(Yii::t('udokmeci.beanstalkd',
-                                "Not Listening {tube} tube since there is no action defined. {methodName}",
-                                ["tube" => $tube, "methodName" => $methodName]) . "\n", Console::FG_YELLOW);
+
+                $this->setTubeActions();
+
+                foreach ($this->tubeActions as $key => $action) {
+                    $bean = $this->beanstalk->watch($key);
+                    if (!$bean) {
+                        $this->stderr("Check beanstalkd!" . "\n", Console::FG_RED);
                     }
                 }
 
